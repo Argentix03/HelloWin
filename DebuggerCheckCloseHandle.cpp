@@ -9,7 +9,7 @@ int main(int argc, const char* argv[])
         if (!CloseHandle(hProcess)) {
             printf("Failed to close handle\n");
             printf("Debugger not detected (with this technique)\n");
-        };
+        }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         printf("Debugger detected\n");
