@@ -1,5 +1,8 @@
-// after spending a full night with my best friend ai to build this (yes there was tons of problems this shit is not normal)
-// after everything already works fine i found we couldve just used this command instead (windows built-in tool): typeperf -qx 230
+// Using fake Registry hive for process enumeration. Performance data is not actually stored in the registry.
+// see https://learn.microsoft.com/en-us/windows/win32/perfctrs/using-the-registry-functions-to-consume-counter-data
+// and https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regqueryvalueexa
+
+// the results for process list parsing (default mode) should kinda be identical to this command (windows built-in tool): typeperf -qx 230
 
 #include <Windows.h>
 #include <winperf.h>
