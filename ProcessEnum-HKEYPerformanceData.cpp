@@ -1,6 +1,7 @@
 // Using fake Registry hive for process enumeration. Performance data is not actually stored in the registry.
 // see https://learn.microsoft.com/en-us/windows/win32/perfctrs/using-the-registry-functions-to-consume-counter-data
 // and https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regqueryvalueexa
+// text values unicode of process named and pids (as text too) has been spotted inside. Hard to find in strings because i output as a unicode buffer char by char as unicde each char (it comes out double padded for single byte chars)
 // dunno how to parse it...
 
 #include <Windows.h>
@@ -80,7 +81,7 @@ int main() {
     // Print the data as ASCII characters
     for (DWORD i = 0; i < cbData; ++i) {
         char ch = static_cast<char>(perfDataBuffer[i]);
-        std::cout << ch;
+        std::cout << ch;  // this comes out as double wide unicode.  "Total" becomes 54 00 00 00 6F 00 00 00 74 00 00 00 61 00 00 00 6C
     }
 
     // Clean up the allocated buffer
