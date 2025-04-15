@@ -32,7 +32,7 @@
 //'9' Down : 03 00 00 * *20 * *00 ...->Change in Byte 3 (0x20)
 //'0' Down : 03 00 00 * *40 * *00 ...->Change in Byte 3 (0x40)
 
-// Easy to map know with good debug information!!!! --debug
+// Easy to map now with good debug information!!!! --debug
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -220,6 +220,8 @@ void PopulateKeyMap() {
     keyMap[{6, 7}] = "'";
 
     // Byte 7: ZXCVBNM row 
+    keyMap[{7, 0}] = "LShift"; // 0x01
+    //keyMap[{7, 1}] = "";  // Unknown
     keyMap[{7, 2}] = "Z"; // 0x04
     keyMap[{7, 3}] = "X"; // 0x08
     keyMap[{7, 4}] = "C"; // 0x10
@@ -228,14 +230,14 @@ void PopulateKeyMap() {
     keyMap[{7, 7}] = "N"; // 0x80
 
     // Byte 8: Left Modifiers
-    keyMap[{8, 0}] = "M"; // .
-    keyMap[{8, 1}] = ","; // Unknown bit
-    keyMap[{8, 2}] = "."; // Unknown bit
-    keyMap[{8, 3}] = "/"; // Unknown bit
+    keyMap[{8, 0}] = "M"; // 
+    keyMap[{8, 1}] = ","; //
+    keyMap[{8, 2}] = "."; // 
+    keyMap[{8, 3}] = "/"; //
     keyMap[{8, 4}] = "LCtrl";
-    keyMap[{8, 5}] = "LGui"; // Left Win
+    keyMap[{8, 5}] = "LGui"; // Left Winkey
     keyMap[{8, 6}] = "LAlt";
-    //keyMap[{8, 7}] = "?"; // Unknown bit
+    //keyMap[{8, 7}] = "?"; // Unknown
 
     // Byte 9: M?, Comma, Period, Slash, Space?
     keyMap[{9, 0}] = " "; 
@@ -282,7 +284,7 @@ void ParseAndPrintKeys(const std::wstring& prefix, const BYTE* buffer, DWORD byt
     // If sometimes it's less, parse up to the actual bytesRead.
     int maxByteIndexToCheck = std::min<int>(bytesRead, 64);
 
-    // Start at byte 2 to skip the typical ReportID & such
+    // Start at byte 1 to skip the typical ReportID Byte
     for (int byteIdx = 1; byteIdx < bytesRead && byteIdx < maxByteIndexToCheck; ++byteIdx) {
         BYTE currentByte = buffer[byteIdx];
         if (currentByte == 0) continue; // Skip if no bits are set in this byte
@@ -302,7 +304,7 @@ void ParseAndPrintKeys(const std::wstring& prefix, const BYTE* buffer, DWORD byt
                     }
                 }
                 else if (debugFlag) {
-                    // Optional: Report unknown bits that are set
+                     // Report unknown bits that are set. Really helps with mapping.
                      std::lock_guard<std::mutex> lock(cout_mutex);
                      std::wcerr << L"[" << prefix << L"] Unknown bit set at Byte " << byteIdx << ", Bit " << bitIdx << std::endl;
                 }
