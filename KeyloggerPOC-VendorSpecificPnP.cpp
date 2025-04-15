@@ -32,6 +32,8 @@
 //'9' Down : 03 00 00 * *20 * *00 ...->Change in Byte 3 (0x20)
 //'0' Down : 03 00 00 * *40 * *00 ...->Change in Byte 3 (0x40)
 
+// Easy to map know with good debug information!!!! --debug
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <setupapi.h>
@@ -53,10 +55,13 @@
 // Linker directives using pragma comments
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "hid.lib")
+#pragma comment(lib, "user32.lib") // debug keyboard hook SetWindowsHookEx
 
 // --- Global Variables ---
 std::mutex cout_mutex;
 std::atomic<bool> keep_running(true);
+HHOOK g_hHook = NULL; // Global handle for the debug keyboard hook
+bool debugFlag = false; // Global flag for debug mode
 
 struct BitPosition {
     int byteIndex;
@@ -76,6 +81,7 @@ void PrintHex(const std::wstring& prefix, const BYTE* buffer, DWORD bytesRead, D
 void PopulateKeyMap(); // Added
 void ParseAndPrintKeys(const std::wstring& prefix, const BYTE* buffer, DWORD bytesRead); // Added
 void MonitorDevice(const std::wstring targetInstanceId, DWORD filterSize, bool parseKeys); // Modified signature
+LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam); // debug hook procedure
 BOOL WINAPI CtrlHandler(DWORD fdwCtrlType);
 void PrintUsage(wchar_t* programName);
 
@@ -154,11 +160,26 @@ void PopulateKeyMap() {
 
     // --- Populate based on previous findings ---
 
-    // Byte 2
+    // Byte 1: F Keys
+    keyMap[{1, 1}] = "F1";
+    keyMap[{1, 2}] = "F2";
+    keyMap[{1, 3}] = "F3";
+    keyMap[{1, 4}] = "F4";
+    keyMap[{1, 5}] = "F5";
+    keyMap[{1, 6}] = "F6";
+    keyMap[{1, 7}] = "F7";
+
+    // Byte 2: F Keys, Numbers, Backtick
+    keyMap[{2, 0}] = "F8";
+    keyMap[{2, 1}] = "F9";
+    keyMap[{2, 2}] = "F10";
+    keyMap[{2, 3}] = "F11"; // Moved from byte 8
+    keyMap[{2, 4}] = "`";   // Backtick
     keyMap[{2, 5}] = "1";
     keyMap[{2, 6}] = "2";
     keyMap[{2, 7}] = "3";
-    // Byte 3
+
+    // Byte 3: Numbers, Minus
     keyMap[{3, 0}] = "4";
     keyMap[{3, 1}] = "5";
     keyMap[{3, 2}] = "6";
@@ -166,32 +187,82 @@ void PopulateKeyMap() {
     keyMap[{3, 4}] = "8";
     keyMap[{3, 5}] = "9";
     keyMap[{3, 6}] = "0";
-    // Byte 4 - ADD MAPPINGS HERE FOR QWERTY ROW (e.g., Q, W, E, R...)
-    // keyMap[{4, 0}] = "Q"; // Example - determine the actual bit
-    // keyMap[{4, 1}] = "W"; // Example
-    // ...
-    // Byte 5
-    keyMap[{5, 5}] = "A"; // From A/B test
-    // Add S, D, F, G, H, J, K, L here
-    // ...
-    // Byte 6 - ADD MAPPINGS HERE FOR ZXCV ROW
-    // ...
-    // Byte 7
-    keyMap[{7, 6}] = "B"; // From A/B test
-    // Add N, M, Comma, Period, Slash here
-    // ...
+    keyMap[{3, 7}] = "-";
 
-    // Byte 8 - Modifiers (and potentially other keys like Space?)
-    keyMap[{8, 0}] = "LShift";
-    // keyMap[{8, 1}] = "LCtrl";  // Determine bit index by testing
-    // keyMap[{8, 2}] = "LAlt";   // Determine bit index by testing
-    // keyMap[{8, 3}] = "LGui";   // (Win Key) Determine bit index by testing
-    // keyMap[{8, 4}] = "RShift"; // Determine bit index by testing
-    // keyMap[{8, 5}] = "RCtrl";  // Determine bit index by testing
-    // keyMap[{8, 6}] = "RAlt";   // Determine bit index by testing
-    // keyMap[{8, 7}] = "RGui";   // Determine bit index by testing
+    // Byte 4: Tab, QWERTY row
+    keyMap[{4, 0}] = "Tab";
+    keyMap[{4, 1}] = "Q";
+    keyMap[{4, 2}] = "W";
+    keyMap[{4, 3}] = "E";
+    keyMap[{4, 4}] = "R";
+    keyMap[{4, 5}] = "T";
+    keyMap[{4, 6}] = "Y";
+    keyMap[{4, 7}] = "U";
 
-    // ADD MAPPINGS FOR Space, Enter, Backspace by testing them individually
+    // Byte 5: I-P, [, Caps, ASDF row
+    keyMap[{5, 0}] = "I";
+    keyMap[{5, 1}] = "O";
+    keyMap[{5, 2}] = "P";
+    keyMap[{5, 3}] = "[";
+    keyMap[{5, 4}] = "CapsLock";
+    keyMap[{5, 5}] = "A";
+    keyMap[{5, 6}] = "S";
+    keyMap[{5, 7}] = "D";
+
+    // Byte 6: F-L, ;, '
+    keyMap[{6, 0}] = "F";
+    keyMap[{6, 1}] = "G";
+    keyMap[{6, 2}] = "H";
+    keyMap[{6, 3}] = "J";
+    keyMap[{6, 4}] = "K";
+    keyMap[{6, 5}] = "L";
+    keyMap[{6, 6}] = ";";
+    keyMap[{6, 7}] = "'";
+
+    // Byte 7: ZXCVBNM row 
+    keyMap[{7, 2}] = "Z"; // 0x04
+    keyMap[{7, 3}] = "X"; // 0x08
+    keyMap[{7, 4}] = "C"; // 0x10
+    keyMap[{7, 5}] = "V"; // 0x20
+    keyMap[{7, 6}] = "B"; // 0x40
+    keyMap[{7, 7}] = "N"; // 0x80
+
+    // Byte 8: Left Modifiers
+    keyMap[{8, 0}] = "M"; // .
+    keyMap[{8, 1}] = ","; // Unknown bit
+    keyMap[{8, 2}] = "."; // Unknown bit
+    keyMap[{8, 3}] = "/"; // Unknown bit
+    keyMap[{8, 4}] = "LCtrl";
+    keyMap[{8, 5}] = "LGui"; // Left Win
+    keyMap[{8, 6}] = "LAlt";
+    //keyMap[{8, 7}] = "?"; // Unknown bit
+
+    // Byte 9: M?, Comma, Period, Slash, Space?
+    keyMap[{9, 0}] = " "; 
+    keyMap[{9, 1}] = ",";
+    keyMap[{9, 2}] = ".";
+    keyMap[{9, 3}] = "RAlt";
+    keyMap[{9, 4}] = "Space"; // Tentative (verify M is not {9,0})
+
+    // Byte 10: F12, RBracket
+    keyMap[{10, 0}] = "F12";
+    keyMap[{10, 7}] = "]";
+
+    // Byte 11: Backslash, Enter, Equals, Backspace
+    keyMap[{11, 0}] = "\\";
+    keyMap[{11, 2}] = "Enter";
+    keyMap[{11, 4}] = "=";
+    keyMap[{11, 6}] = "Backspace";
+
+    // Byte 12: Right Modifiers (Needs verification for RAlt)
+    keyMap[{12, 2}] = "RShift";
+    keyMap[{12, 3}] = "RCtrl";
+    keyMap[{12, 4}] = "UP";
+    keyMap[{12, 5}] = "Left";
+    keyMap[{12, 6}] = "Down";
+    keyMap[{12, 7}] = "Right";
+
+    // ADD MAPPINGS for keys by testing them individually
     // Example: Press Space, see which bit changes -> keyMap[{byte, bit}] = "Space";
     // Example: Press Enter, see which bit changes -> keyMap[{byte, bit}] = "Enter";
     // Example: Press Backspace, see which bit changes -> keyMap[{byte, bit}] = "Backspace";
@@ -207,10 +278,12 @@ void ParseAndPrintKeys(const std::wstring& prefix, const BYTE* buffer, DWORD byt
     std::vector<std::string> pressedKeys;
     std::vector<std::string> pressedModifiers;
 
-    // Iterate through the potential bitmap bytes
-    // Adjust the upper limit (e.g., 16) if keys map to higher bytes
-    const int maxByteIndexToCheck = 16;
-    for (int byteIdx = 2; byteIdx < bytesRead && byteIdx < maxByteIndexToCheck; ++byteIdx) {
+    // If your device always returns 64 bytes, parse them all:
+    // If sometimes it's less, parse up to the actual bytesRead.
+    int maxByteIndexToCheck = std::min<int>(bytesRead, 64);
+
+    // Start at byte 2 to skip the typical ReportID & such
+    for (int byteIdx = 1; byteIdx < bytesRead && byteIdx < maxByteIndexToCheck; ++byteIdx) {
         BYTE currentByte = buffer[byteIdx];
         if (currentByte == 0) continue; // Skip if no bits are set in this byte
 
@@ -228,10 +301,10 @@ void ParseAndPrintKeys(const std::wstring& prefix, const BYTE* buffer, DWORD byt
                         pressedKeys.push_back(it->second);
                     }
                 }
-                else {
+                else if (debugFlag) {
                     // Optional: Report unknown bits that are set
-                    // std::lock_guard<std::mutex> lock(cout_mutex);
-                    // std::wcerr << L"[" << prefix << L"] Unknown bit set at Byte " << byteIdx << ", Bit " << bitIdx << std::endl;
+                     std::lock_guard<std::mutex> lock(cout_mutex);
+                     std::wcerr << L"[" << prefix << L"] Unknown bit set at Byte " << byteIdx << ", Bit " << bitIdx << std::endl;
                 }
             }
         }
@@ -239,7 +312,7 @@ void ParseAndPrintKeys(const std::wstring& prefix, const BYTE* buffer, DWORD byt
 
     // --- Print the result ---
     std::lock_guard<std::mutex> lock(cout_mutex);
-    std::wcout << L"[" << prefix << L"] Parsed Keys: ";
+    std::wcout << std::endl << L"[" << prefix << L"] Parsed Keys: ";
     if (pressedModifiers.empty() && pressedKeys.empty()) {
         std::wcout << L"(None)" << std::endl;
     }
@@ -335,8 +408,9 @@ void MonitorDevice(const std::wstring targetInstanceId, DWORD filterSize, bool p
                         // --- PARSING LOGIC ---
                         if (parseKeys && inputBuffer[0] == 0x03) { // Check flag and Report ID
                             ParseAndPrintKeys(threadPrefix, inputBuffer.data(), bytesRead);
-                            // For now just print hex anyways.
-                            PrintHex(threadPrefix, inputBuffer.data(), bytesRead, filterSize);
+                            if (debugFlag) {
+                                PrintHex(threadPrefix, inputBuffer.data(), bytesRead, filterSize);
+                            }
                         }
                         else if (!parseKeys) { // Only print hex if parsing is disabled
                             PrintHex(threadPrefix, inputBuffer.data(), bytesRead, filterSize);
@@ -372,8 +446,9 @@ void MonitorDevice(const std::wstring targetInstanceId, DWORD filterSize, bool p
             if (bytesRead > 0) {
                 if (parseKeys && inputBuffer[0] == 0x03) { // Check flag and Report ID
                     ParseAndPrintKeys(threadPrefix, inputBuffer.data(), bytesRead);
-                    // For now just print hex anyways.
-                    PrintHex(threadPrefix, inputBuffer.data(), bytesRead, filterSize);
+                    if (debugFlag) {
+                        PrintHex(threadPrefix, inputBuffer.data(), bytesRead, filterSize);
+                    }
                 }
                 else if (!parseKeys) { // Only print hex if parsing is disabled
                     PrintHex(threadPrefix, inputBuffer.data(), bytesRead, filterSize);
@@ -403,6 +478,30 @@ void MonitorDevice(const std::wstring targetInstanceId, DWORD filterSize, bool p
     CloseHandle(hDevice);
 }
 
+// "Low Level" Keyboard Hook Procedure (for Debug mode)
+LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION) {
+        KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
+        // Only process KeyDown events for simplicity in debug comparison
+        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+            DWORD vkCode = p->vkCode;
+            // Maybe add GetKeyNameText later for readability, but VK codes are good for mapping
+            std::lock_guard<std::mutex> lock(cout_mutex);
+            std::cout << "[Hook] KeyDown: VK=0x" << std::hex << std::setw(2) << std::setfill('0') << vkCode
+                << " Scan=0x" << std::setw(2) << std::setfill('0') << p->scanCode
+                << " Flags=0x" << std::setw(2) << std::setfill('0') << p->flags
+                << std::dec << std::endl;
+        }
+        // We could also capture WM_KEYUP if needed
+        // else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+        //     std::lock_guard<std::mutex> lock(cout_mutex);
+        //     std::cout << "[Hook] KeyUp: VK=0x" << std::hex << ... << std::endl;
+        // }
+    }
+    // IMPORTANT: Always call the next hook in the chain
+    return CallNextHookEx(g_hHook, nCode, wParam, lParam);
+}
+
 BOOL WINAPI CtrlHandler(DWORD fdwCtrlType) {
     switch (fdwCtrlType) {
     case CTRL_C_EVENT:
@@ -423,14 +522,19 @@ BOOL WINAPI CtrlHandler(DWORD fdwCtrlType) {
 }
 
 void PrintUsage(wchar_t* programName) {
-    std::wcerr << L"Usage: " << programName << " --device \"<Device Instance ID>\" [--size <report_size>]" << std::endl;
+    std::wcerr << L"Usage: " << programName << L" --device \"<Device ID>\" [options]" << std::endl;
+    std::wcerr << L"Options:" << std::endl;
+    std::wcerr << L"  -d, --device <ID>    Required. The HID device instance ID (use quotes)." << std::endl;
+    std::wcerr << L"  -s, --size <NUM>     Optional. Filter raw hex output by report size (bytes)." << std::endl;
+    std::wcerr << L"  -p, --parse-keys     Optional. Attempt to parse Report ID 0x03 as key presses." << std::endl;
+    std::wcerr << L"  -dbg, --debug        Optional. Enable debug mode:" << std::endl;
+    std::wcerr << L"                       - Implies --parse-keys." << std::endl;
+    std::wcerr << L"                       - Shows parsed keys AND raw hex for Report ID 0x03." << std::endl;
+    std::wcerr << L"                       - Installs a standard keyboard hook for comparison output." << std::endl;
     std::wcerr << L"Example:" << std::endl;
     std::wcerr << L"  " << programName << " --device \"HID\\VID_1B1C&PID_1B3D&MI_00&COL03\\8&10335AD1&0&0002\"" << std::endl;
-    std::wcerr << L"  " << programName << " --device \"HID\\VID_1B1C&PID_1B3D&MI_00&COL03\\8&10335AD1&0&0002\" --size 64" << std::endl;
-    std::wcerr << std::endl;
-    std::wcerr << L"  Use quotes around the Device Instance ID." << std::endl;
-    std::wcerr << L"  --size is optional. If provided, only reports matching that size will be printed." << std::endl;
-    std::wcerr << L"  -p, --parse-keys    Optional. Attempt to parse Report ID 0x03 as key presses." << std::endl;
+    std::wcerr << L"  " << programName << " --device \"HID\\VID_1B1C&PID_1B3D&MI_00&COL03\\8&10335AD1&0&0002\" --size 64 --parse-keys" << std::endl;
+    std::wcerr << L"  " << programName << L" -d \"HID\\...\" -dbg -s 64" << std::endl;
 }
 
 
@@ -463,6 +567,10 @@ int wmain(int argc, wchar_t* argv[]) {
         else if (_wcsicmp(argv[i], L"--parse-keys") == 0 || _wcsicmp(argv[i], L"-p") == 0) {
             parseKeysFlag = true;
         }
+        else if (_wcsicmp(argv[i], L"--debug") == 0 || _wcsicmp(argv[i], L"-dbg") == 0) { // Added Debug Flag
+            debugFlag = true;
+            parseKeysFlag = true; // Debug implies parsing
+        }
         else {
             std::wcerr << L"Error: Unknown or invalid argument: " << argv[i] << std::endl;
             PrintUsage(argv[0]);
@@ -478,11 +586,22 @@ int wmain(int argc, wchar_t* argv[]) {
     }
 
     // --- Populate Key Map ---
-    // Do this BEFORE starting the thread that needs it
     if (parseKeysFlag) { // Only populate if needed
         PopulateKeyMap();
     }
 
+    // --- Install Hook (Debug Only) ---
+    if (debugFlag) {
+        std::cout << "Debug mode: Installing keyboard hook..." << std::endl;
+        // WH_KEYBOARD_LL is system-wide, last param must be 0
+        g_hHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(NULL), 0);
+        if (g_hHook == NULL) {
+            std::cerr << "Error: Failed to install keyboard hook! GLE=" << GetLastError() << std::endl;
+            std::cerr << "Debug hook output will not be available." << std::endl;
+            // Continue without the hook for other debug output? Or exit? Let's continue.
+            // return 1; // Optionally exit if hook is critical for debugging
+        }
+    }
 
     // Set up console control handler for graceful shutdown
     if (!SetConsoleCtrlHandler(CtrlHandler, TRUE)) {
@@ -495,6 +614,34 @@ int wmain(int argc, wchar_t* argv[]) {
     // We run the monitor in a separate thread so main can wait for Ctrl+C
     // without blocking indefinitely if the monitor thread exits early due to error.
     std::thread monitorThread(MonitorDevice, targetInstanceId, filterSize, parseKeysFlag);
+
+    // --- Main Loop (Wait / Message Pump) ---
+    MSG msg;
+    while (keep_running) {
+        // If hook is installed, we need to process messages for it to work
+        if (g_hHook != NULL) {
+            // PeekMessage is non-blocking, use PM_REMOVE to process messages
+            if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+            else {
+                // No messages, sleep briefly to avoid spinning
+                Sleep(10); // Reduce CPU usage when idle
+            }
+        }
+        else {
+            // No hook, just sleep
+            Sleep(200);
+        }
+    }
+
+    // --- Unhook (Debug Only) ---
+    if (g_hHook != NULL) {
+        std::cout << "Debug mode: Unhooking keyboard..." << std::endl;
+        UnhookWindowsHookEx(g_hHook);
+        g_hHook = NULL;
+    }
 
     // --- Wait for Shutdown Signal ---
     while (keep_running) {
