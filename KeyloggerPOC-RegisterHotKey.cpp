@@ -1,3 +1,11 @@
+// https://www.elastic.co/security-labs/detecting-hotkey-based-keyloggers
+// This one simply registers keys as hotkeys using RegisterHotKey API - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey
+// Listens to all these registered hotkey events, for each key pressed:
+// 1. Log the key - its a keylogger after all
+// 2. Unregister the hotkey
+// 3. Send a virtual keypress of the key - otherwise this will distrupt the user
+// 4. Re-register the hotkey
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <iostream>
