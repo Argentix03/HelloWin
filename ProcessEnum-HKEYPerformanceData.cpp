@@ -2,7 +2,7 @@
 // see https://learn.microsoft.com/en-us/windows/win32/perfctrs/using-the-registry-functions-to-consume-counter-data
 // and https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regqueryvalueexa
 
-// the results for process list parsing (default mode) should kinda be identical to this command (windows built-in tool): typeperf -qx 230
+// the results for process list parsing (default mode) should kinda be identical to this command (windows built-in tool): typeperf -qx 230 | findstr /c:"ID Process"   or   typeperf "\230(*)\ID Process"
 
 #include <Windows.h>
 #include <winperf.h>
