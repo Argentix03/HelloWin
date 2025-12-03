@@ -4,9 +4,19 @@
 // Get-PnpDevice | Where-Object{ $_.FriendlyName -like '*Corsair*' -or $_.InstanceId -like '*VID_1B1C*' } | Format-List *
 //
 // # Specifically look within Keyboard and HID classes
-// Get-PnpDevice -Class 'Keyboard' | Where - Object{ $_.FriendlyName -like '*Corsair*' -or $_.InstanceId -like '*VID_1B1C*' } | Format-List *
-// Get-PnpDevice -Class 'HIDClass' | Where - Object{ $_.FriendlyName -like '*Corsair*' -or $_.InstanceId -like '*VID_1B1C*' } | Format-List *
-
+// Get-PnpDevice -Class 'Keyboard' | Where-Object{ $_.FriendlyName -like '*Corsair*' -or $_.InstanceId -like '*VID_1B1C*' } | Format-List *
+// Get-PnpDevice -Class 'HIDClass' | Where-Object{ $_.FriendlyName -like '*Corsair*' -or $_.InstanceId -like '*VID_1B1C*' } | Format-List *
+//
+// Inspect system hid devices for likely candidates:
+// Get - PnpDevice - Class 'HIDClass' |
+// Where - Object{ $_.Status - eq 'OK' - and $_.InstanceId - match '&COL' } |
+// ForEach - Object{
+//     Write - Host "`n========================================" - ForegroundColor Cyan
+//     Write - Host "$($_.FriendlyName)" - ForegroundColor Yellow
+//     Write - Host "$($_.InstanceId)" - ForegroundColor Gray
+// 
+//     .\KeyloggerPOC - VendorSpecificPnP.exe --device "$($_.InstanceId)" --inspect
+// }
 
 // So far analysis:
 //Initial State : 03 00 00 00 00 00 00 00 00 ... (All zeros after byte 4)->No keys pressed.
@@ -523,10 +533,75 @@ BOOL WINAPI CtrlHandler(DWORD fdwCtrlType) {
     }
 }
 
+void InspectDevice(const std::wstring& targetInstanceId) {
+    std::wstring devicePath = FindDevicePath(targetInstanceId);
+    if (devicePath.empty()) return;
+
+    HANDLE hDevice = CreateFile(devicePath.c_str(), 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+
+    if (hDevice == INVALID_HANDLE_VALUE) {
+        std::wcerr << L"Failed to open device. GLE=" << GetLastError() << std::endl;
+        return;
+    }
+
+    // Get preparsed data
+    PHIDP_PREPARSED_DATA preparsedData;
+    if (!HidD_GetPreparsedData(hDevice, &preparsedData)) {
+        std::wcerr << L"Failed to get preparsed data." << std::endl;
+        CloseHandle(hDevice);
+        return;
+    }
+
+    HIDP_CAPS caps;
+    if (HidP_GetCaps(preparsedData, &caps) == HIDP_STATUS_SUCCESS) {
+        std::wcout << L"\n=== HID Capabilities ===" << std::endl;
+        std::wcout << L"Usage Page: 0x" << std::hex << std::setw(4) << std::setfill(L'0')
+            << caps.UsagePage << std::dec << std::endl;
+        std::wcout << L"Usage: 0x" << std::hex << std::setw(4) << std::setfill(L'0')
+            << caps.Usage << std::dec << std::endl;
+        std::wcout << L"Input Report Length: " << caps.InputReportByteLength << L" bytes" << std::endl;
+        std::wcout << L"Output Report Length: " << caps.OutputReportByteLength << L" bytes" << std::endl;
+        std::wcout << L"Feature Report Length: " << caps.FeatureReportByteLength << L" bytes" << std::endl;
+        std::wcout << L"Number of Link Collections: " << caps.NumberLinkCollectionNodes << std::endl;
+        std::wcout << L"Input Button Caps: " << caps.NumberInputButtonCaps << std::endl;
+        std::wcout << L"Input Value Caps: " << caps.NumberInputValueCaps << std::endl;
+
+        // Decode common usage page/usage combinations
+        if (caps.UsagePage == 0x01 && caps.Usage == 0x06) {
+            std::wcout << L"Type: STANDARD KEYBOARD (System will block)" << std::endl;
+        }
+        else if (caps.UsagePage == 0x0C) {
+            std::wcout << L"Type: Consumer Control (Media keys, etc.)" << std::endl;
+        }
+        else if (caps.UsagePage >= 0xFF00) {
+            std::wcout << L"Type: VENDOR-SPECIFIC (Likely accessible!)" << std::endl;
+        }
+        bool likelyKeylogCapable = (
+            caps.UsagePage >= 0xFF00 &&           // Vendor-specific
+            caps.InputReportByteLength >= 60 &&   // Large bitmap
+            caps.OutputReportByteLength == 0 &&   // Read-only
+            caps.NumberInputButtonCaps == 0 &&          // Not button-based
+            caps.NumberInputValueCaps >= 1 &&           // Value/bitmap based
+            caps.NumberLinkCollectionNodes == 1   // Simple structure
+            );
+        
+        if (likelyKeylogCapable) {
+            std::wcout << L"\n*** POTENTIAL KEYLOGGING INTERFACE ***" << std::endl;
+            std::wcout << L"This collection matches the signature of a keyboard state mirror." << std::endl;
+        }
+    }
+
+    HidD_FreePreparsedData(preparsedData);
+    CloseHandle(hDevice);
+}
+
+
 void PrintUsage(wchar_t* programName) {
     std::wcerr << L"Usage: " << programName << L" --device \"<Device ID>\" [options]" << std::endl;
     std::wcerr << L"Options:" << std::endl;
     std::wcerr << L"  -d, --device <ID>    Required. The HID device instance ID (use quotes)." << std::endl;
+    std::wcerr << L"  -i, --inspect        Optional. Show HID capabilities and exit (no monitoring)." << std::endl;
     std::wcerr << L"  -s, --size <NUM>     Optional. Filter raw hex output by report size (bytes)." << std::endl;
     std::wcerr << L"  -p, --parse-keys     Optional. Attempt to parse Report ID 0x03 as key presses." << std::endl;
     std::wcerr << L"  -dbg, --debug        Optional. Enable debug mode:" << std::endl;
@@ -545,6 +620,7 @@ int wmain(int argc, wchar_t* argv[]) {
     std::wstring targetInstanceId = L"";
     DWORD filterSize = 0;       // flag --size
     bool parseKeysFlag = false; // flag --parse-keys
+    bool inspectMode = false;   // flag --inspect
 
     // --- Argument Parsing ---
     for (int i = 1; i < argc; ++i) {
@@ -573,6 +649,9 @@ int wmain(int argc, wchar_t* argv[]) {
             debugFlag = true;
             parseKeysFlag = true; // Debug implies parsing
         }
+        else if (_wcsicmp(argv[i], L"--inspect") == 0 || _wcsicmp(argv[i], L"-i") == 0) {
+            inspectMode = true;  // NEW FLAG
+        }
         else {
             std::wcerr << L"Error: Unknown or invalid argument: " << argv[i] << std::endl;
             PrintUsage(argv[0]);
@@ -585,6 +664,12 @@ int wmain(int argc, wchar_t* argv[]) {
         std::wcerr << L"Error: --device argument is required." << std::endl;
         PrintUsage(argv[0]);
         return 1;
+    }
+
+    // --- INSPECT MODE: Just analyze and exit ---
+    if (inspectMode) {
+        InspectDevice(targetInstanceId);
+        return 0;  // Exit immediately after inspection
     }
 
     // --- Populate Key Map ---
